@@ -1,0 +1,264 @@
+:root {
+  --bg: #0a0a0f;
+  --bg-card: #111118;
+  --bg-code: #0d0d14;
+  --border: #1e1e2e;
+  --text: #cdd6f4;
+  --text-muted: #6c7086;
+  --accent: #89b4fa;
+  --accent-hover: #b4d0fc;
+  --tag: #1e1e2e;
+  --tag-text: #89dceb;
+  --heading: #ffffff;
+  --link: #89b4fa;
+  --link-hover: #cba6f7;
+  --code-inline: #f38ba8;
+  --stars-opacity: 0.6;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html { font-size: 16px; scroll-behavior: smooth; }
+
+body {
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.7;
+  min-height: 100vh;
+  position: relative;
+  overflow-x: hidden;
+}
+
+/* ── Starfield ─────────────────────────────────────────── */
+#stars-canvas {
+  position: fixed;
+  top: 0; left: 0;
+  width: 100%; height: 100%;
+  z-index: 0;
+  pointer-events: none;
+  opacity: var(--stars-opacity);
+}
+
+/* ── Layout ─────────────────────────────────────────────── */
+.site-wrapper {
+  position: relative;
+  z-index: 1;
+  max-width: 780px;
+  margin: 0 auto;
+  padding: 0 1.5rem 4rem;
+}
+
+/* ── Header ─────────────────────────────────────────────── */
+.site-header {
+  padding: 3rem 0 2rem;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 3rem;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.site-title {
+  font-size: 1.4rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--heading);
+  text-decoration: none;
+}
+
+.site-title:hover { color: var(--accent); }
+
+.site-nav a {
+  color: var(--text-muted);
+  text-decoration: none;
+  font-size: 0.9rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  transition: color 0.2s;
+}
+
+.site-nav a:hover { color: var(--accent); }
+
+/* ── Post list ──────────────────────────────────────────── */
+.post-list { list-style: none; }
+
+.post-item {
+  padding: 1.8rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.post-item:last-child { border-bottom: none; }
+
+.post-meta {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  letter-spacing: 0.04em;
+  margin-bottom: 0.5rem;
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  flex-wrap: wrap;
+}
+
+.post-title-link {
+  font-size: 1.3rem;
+  font-weight: 600;
+  color: var(--heading);
+  text-decoration: none;
+  line-height: 1.3;
+  display: block;
+  margin-bottom: 0.5rem;
+  transition: color 0.2s;
+}
+
+.post-title-link:hover { color: var(--accent); }
+
+.post-summary {
+  color: var(--text-muted);
+  font-size: 0.95rem;
+  margin-bottom: 0.8rem;
+}
+
+.tags { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+
+.tag {
+  background: var(--tag);
+  color: var(--tag-text);
+  font-size: 0.75rem;
+  padding: 0.15rem 0.55rem;
+  border-radius: 999px;
+  letter-spacing: 0.03em;
+}
+
+/* ── Single post ────────────────────────────────────────── */
+.post-header { margin-bottom: 2.5rem; padding-bottom: 1.5rem; border-bottom: 1px solid var(--border); }
+
+.post-header h1 {
+  font-size: clamp(1.6rem, 4vw, 2.2rem);
+  font-weight: 700;
+  color: var(--heading);
+  line-height: 1.25;
+  margin-bottom: 0.8rem;
+}
+
+/* ── Article body ───────────────────────────────────────── */
+.post-content { max-width: 100%; }
+
+.post-content h1,
+.post-content h2,
+.post-content h3,
+.post-content h4 {
+  color: var(--heading);
+  font-weight: 600;
+  line-height: 1.3;
+  margin: 2rem 0 0.8rem;
+}
+
+.post-content h2 { font-size: 1.5rem; border-bottom: 1px solid var(--border); padding-bottom: 0.4rem; }
+.post-content h3 { font-size: 1.2rem; }
+.post-content h4 { font-size: 1rem; color: var(--accent); }
+
+.post-content p { margin-bottom: 1.2rem; }
+
+.post-content a { color: var(--link); text-decoration: underline; text-underline-offset: 3px; }
+.post-content a:hover { color: var(--link-hover); }
+
+.post-content ul, .post-content ol {
+  padding-left: 1.5rem;
+  margin-bottom: 1.2rem;
+}
+.post-content li { margin-bottom: 0.3rem; }
+
+.post-content blockquote {
+  border-left: 3px solid var(--accent);
+  margin: 1.5rem 0;
+  padding: 0.5rem 1.2rem;
+  color: var(--text-muted);
+  font-style: italic;
+  background: var(--bg-card);
+  border-radius: 0 6px 6px 0;
+}
+
+.post-content img {
+  max-width: 100%;
+  border-radius: 8px;
+  margin: 1.5rem 0;
+  border: 1px solid var(--border);
+}
+
+.post-content hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 2rem 0;
+}
+
+/* inline code */
+.post-content :not(pre) > code {
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+  font-size: 0.85em;
+  color: var(--code-inline);
+  background: var(--bg-code);
+  padding: 0.1em 0.45em;
+  border-radius: 4px;
+}
+
+/* code blocks */
+.post-content pre {
+  background: var(--bg-code);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1.2rem 1.4rem;
+  overflow-x: auto;
+  margin: 1.5rem 0;
+  font-size: 0.88rem;
+  line-height: 1.6;
+}
+
+.post-content pre code {
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+  color: var(--text);
+  background: none;
+  padding: 0;
+}
+
+/* Hugo syntax highlight override — keep dark bg */
+.highlight { border-radius: 8px; margin: 1.5rem 0; overflow: hidden; }
+.highlight pre { margin: 0; border-radius: 0; border: none; }
+
+/* ── Footer ─────────────────────────────────────────────── */
+.site-footer {
+  margin-top: 4rem;
+  padding-top: 2rem;
+  border-top: 1px solid var(--border);
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.footer-links { display: flex; gap: 1.2rem; }
+.footer-links a { color: var(--text-muted); text-decoration: none; transition: color 0.2s; }
+.footer-links a:hover { color: var(--accent); }
+
+/* ── Back link ──────────────────────────────────────────── */
+.back-link {
+  display: inline-block;
+  color: var(--text-muted);
+  text-decoration: none;
+  font-size: 0.9rem;
+  margin-bottom: 2rem;
+  transition: color 0.2s;
+}
+.back-link:hover { color: var(--accent); }
+.back-link::before { content: '← '; }
+
+/* ── Responsive ─────────────────────────────────────────── */
+@media (max-width: 480px) {
+  .site-header { flex-direction: column; gap: 0.8rem; }
+}

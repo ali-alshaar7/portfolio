@@ -1,0 +1,21 @@
+baseURL = "https://ali-alshaar7.github.io/portfolio/"
+languageCode = "en-us"
+title = "Ali Alshaarawy"
+enableEmoji = true
+
+[params]
+  author = "Ali Alshaarawy"
+  description = "Writing about engineering, systems, and whatever I find interesting."
+  github = "https://github.com/ali-alshaar7"
+  linkedin = "https://www.linkedin.com/in/ali-al-shaarawy-3620241b0/"
+
+[markup]
+  [markup.highlight]
+    style = "dracula"
+    lineNos = false
+    noClasses = true
+  [markup.goldmark.renderer]
+    unsafe = true
+
+[taxonomies]
+  tag = "tags"

@@ -1,0 +1,20 @@
+{{ define "main" }}
+<ul class="post-list">
+  {{ range (where .Site.RegularPages "Type" "posts") }}
+  <li class="post-item">
+    <div class="post-meta">
+      <time>{{ .Date.Format "Jan 2, 2006" }}</time>
+      {{ with .Params.tags }}
+      <div class="tags">
+        {{ range . }}<span class="tag">{{ . }}</span>{{ end }}
+      </div>
+      {{ end }}
+    </div>
+    <a class="post-title-link" href="{{ .RelPermalink }}">{{ .Title }}</a>
+    {{ with .Summary }}<p class="post-summary">{{ . }}</p>{{ end }}
+  </li>
+  {{ else }}
+  <li style="color: var(--text-muted); padding: 2rem 0;">No posts yet — check back soon.</li>
+  {{ end }}
+</ul>
+{{ end }}

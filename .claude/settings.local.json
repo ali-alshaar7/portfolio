@@ -1,0 +1,31 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git clone *)",
+      "Bash(echo \"EXIT_CODE: $?\")",
+      "Bash(ls /home/alia/projects/portfolio && echo \"---\" && ls /home/alia/projects/)",
+      "Read(//home/alia/projects/**)",
+      "Bash(cp -r /tmp/portfolio_clone/. /home/alia/projects/portfolio/)",
+      "Bash(rm -rf /tmp/portfolio_clone)",
+      "Bash(hugo version *)",
+      "Bash(curl -sL https://github.com/gohugoio/hugo/releases/download/v0.147.2/hugo_extended_0.147.2_linux-amd64.tar.gz)",
+      "Bash(tar -xz -C /tmp)",
+      "Bash(sudo mv /tmp/hugo /usr/local/bin/hugo)",
+      "Bash(rm -f index.html LICENSE.txt README.txt)",
+      "Bash(rm -rf assets images)",
+      "Bash(hugo new *)",
+      "Bash(mkdir -p /home/alia/projects/portfolio/layouts/_default /home/alia/projects/portfolio/layouts/partials /home/alia/projects/portfolio/static/css /home/alia/projects/portfolio/static/js)",
+      "Bash(hugo build *)",
+      "Bash(hugo server *)",
+      "Bash(echo \"Server PID: $!\")",
+      "WebFetch(domain:localhost)",
+      "Bash(curl -s http://localhost:1313/portfolio/)",
+      "Bash(curl -s http://localhost:1313/portfolio/posts/hello-world/)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:1313/portfolio/posts/hello-world/)",
+      "Bash(kill 1117222)"
+    ],
+    "additionalDirectories": [
+      "/home/alia/projects/portfolio/layouts"
+    ]
+  }
+}

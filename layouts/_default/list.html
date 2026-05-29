@@ -1,0 +1,15 @@
+{{ define "main" }}
+<a class="back-link" href="/">All posts</a>
+<h2 style="color: var(--heading); margin-bottom: 2rem;">{{ .Title }}</h2>
+<ul class="post-list">
+  {{ range .Pages }}
+  <li class="post-item">
+    <div class="post-meta">
+      <time>{{ .Date.Format "Jan 2, 2006" }}</time>
+    </div>
+    <a class="post-title-link" href="{{ .Permalink }}">{{ .Title }}</a>
+    {{ with .Summary }}<p class="post-summary">{{ . }}</p>{{ end }}
+  </li>
+  {{ end }}
+</ul>
+{{ end }}

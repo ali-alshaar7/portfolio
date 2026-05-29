@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><script src="/livereload.js?mindelay=10&amp;v=2&amp;port=1313&amp;path=livereload" data-no-instant defer></script>
+  <meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Building a GPU Memory Swapper with LD_PRELOAD · Ali Alshaarawy</title>
+<meta name="description" content="Writing about engineering, systems, and whatever I find interesting." />
+<link rel="stylesheet" href="/css/style.css" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+
+</head>
+<body>
+  <canvas id="stars-canvas"></canvas>
+  <div class="site-wrapper">
+    <header class="site-header">
+  <span class="site-title">AA's blog</span>
+</header>
+
+    <main>
+      
+<a class="back-link" href="/">All posts</a>
+<article>
+  <header class="post-header">
+    <h1>Building a GPU Memory Swapper with LD_PRELOAD</h1>
+    <div class="post-meta">
+      <time>May 25, 2026</time>
+      
+      <div class="tags">
+        <span class="tag">cuda</span><span class="tag">gpu</span><span class="tag">memory</span><span class="tag">systems</span>
+      </div>
+      
+    </div>
+  </header>
+  <div class="post-content">
+    <p>I wanted to see if GPU memory overflow could be handled transparently: no code changes, no application flags, just drop in a library and have it work. This is a writeup of how that went, including two dead ends before finding the right approach.</p>
+<p>The result is <a href="https://github.com/ali-alshaar7/cuda_swap">cuda_swap</a>.</p>
+<hr>
+<h2 id="the-interception-layer">The Interception Layer</h2>
+<p><code>LD_PRELOAD</code> loads a shared library before anything else in the process. If that library exports a symbol that another library also exports, the preloaded one wins. CUDA programs allocate GPU memory through two APIs: <code>cudaMalloc</code> in the runtime layer and <code>cuMemAlloc</code> in the driver layer. Most frameworks use the driver API directly, or the runtime API which calls down to it. Exporting both from a preloaded <code>.so</code> means every allocation the process makes goes through my code first.</p>
+<p>The interception itself is straightforward. The trickier part is resolving the real underlying functions: I need a pointer to the real allocator so the hook can delegate to it.</p>
+<p><code>dlvsym(RTLD_NEXT, &quot;dlsym&quot;, &quot;GLIBC_2.2.5&quot;)</code> searches past this library in the load order to get glibc&rsquo;s own <code>dlsym</code>, pinned by version string. Then <code>libcuda.so.1</code> is opened with <code>RTLD_NOLOAD</code> to get a handle to the already-loaded library without loading a second copy. Resolving from that specific handle bypasses <code>RTLD_NEXT</code> search order entirely, so the result is always the symbol from <code>libcuda.so.1</code> regardless of what else is in the preload chain:</p>
+<div class="highlight"><pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span><span style="color:#ff79c6">using</span> DlsymFn <span style="color:#ff79c6">=</span> <span style="color:#8be9fd">void</span><span style="color:#ff79c6">*</span>(<span style="color:#ff79c6">*</span>)(<span style="color:#8be9fd">void</span><span style="color:#ff79c6">*</span>, <span style="color:#ff79c6">const</span> <span style="color:#8be9fd">char</span><span style="color:#ff79c6">*</span>);
+</span></span><span style="display:flex;"><span>DlsymFn real_dlsym <span style="color:#ff79c6">=</span> (DlsymFn)dlvsym(RTLD_NEXT, <span style="color:#f1fa8c">&#34;dlsym&#34;</span>, <span style="color:#f1fa8c">&#34;GLIBC_2.2.5&#34;</span>);
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">// RTLD_NOLOAD gets a handle to the already-loaded libcuda without a second dlopen
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span><span style="color:#8be9fd">void</span><span style="color:#ff79c6">*</span> libcuda <span style="color:#ff79c6">=</span> dlopen(<span style="color:#f1fa8c">&#34;libcuda.so.1&#34;</span>, RTLD_NOW <span style="color:#ff79c6">|</span> RTLD_NOLOAD);
+</span></span><span style="display:flex;"><span>real_cuMemAlloc <span style="color:#ff79c6">=</span> (Fn_cuMemAlloc)real_dlsym(libcuda, <span style="color:#f1fa8c">&#34;cuMemAlloc_v2&#34;</span>);
+</span></span></code></pre></div><p>With that in place, I control every allocation and can decide what to do with it.</p>
+<hr>
+<h2 id="dead-end-1-manual-eviction">Dead End 1: Manual Eviction</h2>
+<p>The first approach was to track all live allocations and evict them manually when VRAM fills up. When a new allocation request comes in and there isn&rsquo;t enough VRAM:</p>
+<ol>
+<li>Pick a buffer to evict (LRU or similar)</li>
+<li>Copy it to host RAM with <code>cudaMemcpy</code></li>
+<li>Free the VRAM</li>
+<li>Service the new allocation</li>
+<li>When the evicted buffer is needed again, copy it back</li>
+</ol>
+<p>This is exactly what the Linux kernel does with anonymous pages and swap. The kernel knows when to bring a page back because the CPU&rsquo;s MMU raises a hardware page fault when a process touches an address whose physical page has been swapped out. The fault is invisible to the application; the kernel handles it, copies the page back, and execution continues.</p>
+<p>The GPU doesn&rsquo;t expose this. There&rsquo;s no public mechanism for a userspace library to receive a notification when the GPU is about to dereference a specific device pointer. Without that, there&rsquo;s no way to know when to restore an evicted buffer before the GPU needs it. The only alternative is to intercept every CUDA kernel launch and inspect its arguments, but kernel arguments are passed to the driver as an opaque array with no public API to decode which entries are device pointers vs scalars. The approach doesn&rsquo;t have a clean path forward.</p>
+<hr>
+<h2 id="dead-end-2-virtual-memory-management">Dead End 2: Virtual Memory Management</h2>
+<p>The CUDA Virtual Memory Management API (CUDA 10.2+) separates virtual address reservation from physical backing, letting you remap what physical memory a pointer points to without changing the pointer itself. This looked promising: if you could remap an evicted buffer&rsquo;s backing without changing its pointer, the pointer-invalidation problem from manual eviction goes away.</p>
+<p>But the fundamental constraint is the same: you still need to know <em>before</em> a kernel runs which buffers it will touch, so you can ensure they&rsquo;re in VRAM when the kernel starts. VMM gives finer-grained control over the mechanics of that operation without solving the scheduling problem.</p>
+<p>The root issue with any manual approach is the missing primitive: hardware notification when the GPU accesses an address that isn&rsquo;t backed by VRAM.</p>
+<hr>
+<h2 id="the-missing-piece-cumemallocmanaged">The Missing Piece: cuMemAllocManaged</h2>
+<p>After both dead ends I came across <a href="https://www.reddit.com/r/LocalLLaMA/comments/1di3kyn/long_shot_solution_combine_system_ram_with_vram/">this thread on r/LocalLLaMA</a> discussing VRAM extension for llama.cpp and Stable Diffusion. The solutions there required modifying application code or setting software-specific flags. But the thread mentioned CUDA unified memory, which led to <code>cuMemAllocManaged</code>, and that has exactly the hardware support I was missing.</p>
+<h3 id="how-it-works">How It Works</h3>
+<p><code>cuMemAllocManaged</code> allocates memory in a shared virtual address space accessible from both CPU and GPU. The driver handles migration automatically using the GPU&rsquo;s hardware page fault mechanism, available on Pascal-generation GPUs (GTX 10 series) and later.</p>
+<p>When you allocate managed memory, the driver maps the virtual address range into both the CPU&rsquo;s and GPU&rsquo;s page tables, but initially no physical memory is allocated at all: pages have no backing until they&rsquo;re first touched. The first time the GPU touches a page, the hardware MMU raises a fault. The CUDA driver&rsquo;s fault handler runs on the CPU, allocates a physical VRAM page, DMAs any initialised content in, updates the GPU page table to mark it present, and signals the GPU to replay the faulting instruction. From the kernel&rsquo;s perspective, the instruction stalls until the fault is serviced, then completes normally.</p>
+<p>Pages move rather than copy. When a page migrates to VRAM, the host physical page is freed; when it&rsquo;s later evicted from VRAM under pressure, a fresh host physical page is allocated for it. Total physical backing at any moment is at most 1× the allocation size, split across wherever the pages currently are.</p>
+<p>Before Pascal, unified memory worked differently: all pages were migrated eagerly to VRAM before any kernel launched, and the total managed allocation had to fit in VRAM or the launch failed. Hardware page faults changed this to genuine demand paging, which is what makes the overflow case work at all.</p>
+<p><code>cuMemAdvise</code> influences the driver&rsquo;s migration policy:</p>
+<div class="highlight"><pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span><span style="color:#6272a4">// Prefer keeping this allocation in VRAM; only evict under genuine pressure
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>cuMemAdvise(ptr, size, CU_MEM_ADVISE_SET_PREFERRED_LOCATION, device);
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">// Map this allocation on the device without migrating (for read-mostly access patterns)
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>cuMemAdvise(ptr, size, CU_MEM_ADVISE_SET_ACCESSED_BY, device);
+</span></span></code></pre></div><p><code>PREFERRED_LOCATION</code> doesn&rsquo;t pin pages: the driver can still evict under pressure, but it biases the policy to keep pages on the GPU when there&rsquo;s room.</p>
+<h3 id="the-memory-cost">The Memory Cost</h3>
+<p>In principle, managed memory pages on Pascal+ GPUs are demand-paged: physical backing is allocated on first touch, and pages that migrate to VRAM free their host physical backing. In practice, <code>cuMemAllocManaged</code> with <code>CU_MEM_ATTACH_GLOBAL</code> (the flag required for GPU-wide accessibility) places pages in system RAM at allocation time. And because GPU kernels execute asynchronously, a Python allocation loop can issue many managed allocations before the GPU has executed any of them, leaving all N tensors simultaneously backed in system RAM.</p>
+<p>This matters. Routing every allocation through managed memory when VRAM has room can exhaust host RAM from this transient in-flight window alone, before any real overflow has occurred. The threshold approach sidesteps this: <code>cuMemAlloc</code> pages are placed directly in VRAM, never touch host RAM, and cannot be evicted by the managed memory driver.</p>
+<p>For managed allocations that do get used, the code also calls <code>cuMemPrefetchAsync</code> immediately after the <code>cuMemAdvise</code> calls, while VRAM still has headroom, to proactively migrate pages before GPU kernels queue up and start faulting:</p>
+<div class="highlight"><pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span><span style="color:#ff79c6">if</span> (free_vram() <span style="color:#ff79c6">&gt;</span> size)
+</span></span><span style="display:flex;"><span>    cuMemPrefetchAsync(<span style="color:#ff79c6">*</span>out, size, device, <span style="color:#bd93f9">0</span>);
+</span></span></code></pre></div><p>This reduces runtime page faults when the workload has predictable access patterns.</p>
+<hr>
+<h2 id="the-threshold-allocator">The Threshold Allocator</h2>
+<p>The approach that worked: use regular <code>cuMemAlloc</code> while VRAM has headroom, and only fall back to <code>cuMemAllocManaged</code> when it doesn&rsquo;t. Most of the time, most allocations are regular VRAM: fast, no driver migration machinery involved, no host RAM backing store consumed. Only allocations that actually overflow use managed memory.</p>
+<div class="highlight"><pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span><span style="color:#8be9fd">bool</span> use_managed <span style="color:#ff79c6">=</span> free_vram() <span style="color:#ff79c6">&lt;</span> threshold <span style="color:#ff79c6">+</span> requested_size;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">if</span> (<span style="color:#ff79c6">!</span>use_managed) {
+</span></span><span style="display:flex;"><span>    rc <span style="color:#ff79c6">=</span> real_cuMemAlloc(out, size);
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">if</span> (rc <span style="color:#ff79c6">!=</span> CUDA_SUCCESS) use_managed <span style="color:#ff79c6">=</span> <span style="color:#8be9fd;font-style:italic">true</span>;  <span style="color:#6272a4">// VRAM full despite check, try managed
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>} <span style="color:#ff79c6">else</span> <span style="color:#50fa7b">if</span> (free_vram() <span style="color:#ff79c6">&gt;=</span> size) {
+</span></span><span style="display:flex;"><span>    <span style="color:#6272a4">// Threshold says managed, but VRAM can still fit this allocation.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>    <span style="color:#6272a4">// Prefer cuMemAlloc to avoid system RAM pressure from managed page placement.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>    rc <span style="color:#ff79c6">=</span> real_cuMemAlloc(out, size);
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">if</span> (rc <span style="color:#ff79c6">==</span> CUDA_SUCCESS) use_managed <span style="color:#ff79c6">=</span> <span style="color:#8be9fd;font-style:italic">false</span>;
+</span></span><span style="display:flex;"><span>}
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">if</span> (use_managed) {
+</span></span><span style="display:flex;"><span>    rc <span style="color:#ff79c6">=</span> real_cuMemAllocManaged(out, size, CU_MEM_ATTACH_GLOBAL);
+</span></span><span style="display:flex;"><span>    real_cuMemAdvise(<span style="color:#ff79c6">*</span>out, size, CU_MEM_ADVISE_SET_PREFERRED_LOCATION, device);
+</span></span><span style="display:flex;"><span>    real_cuMemAdvise(<span style="color:#ff79c6">*</span>out, size, CU_MEM_ADVISE_SET_ACCESSED_BY, device);
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">if</span> (free_vram() <span style="color:#ff79c6">&gt;</span> size)
+</span></span><span style="display:flex;"><span>        real_cuMemPrefetchAsync(<span style="color:#ff79c6">*</span>out, size, device, <span style="color:#bd93f9">0</span>);
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></div><p>The threshold (default 512 MB) prevents switching to managed right at the edge of VRAM: the last 512 MB stays as a buffer. This matters because the managed memory infrastructure itself has overhead, and because two concurrent allocations that both observe &ldquo;just enough room&rdquo; could both fail without the buffer.</p>
+<p>Running the OOM test on an RTX 3070 Ti (8 GB VRAM, 7.65 GB reported free by CUDA after driver reserves) in a 9 GB Docker container, <code>THRESHOLD=512</code> and <code>THRESHOLD=999999</code> produce nearly identical peak system RAM: both are bounded by the true overflow amount (workload size minus VRAM capacity). The <code>else if</code> guard above is what makes this true: even with an absurdly high threshold, allocations that fit in VRAM still go through <code>cuMemAlloc</code> and never touch host RAM.</p>
+<p>The difference shows up in throughput. Across repeated trials, threshold-based allocation runs about 4% faster per tensor. <code>cuMemAlloc</code> pages are pinned in VRAM and cannot be evicted to service page faults from managed allocations: VRAM-resident tensors stay put during computation. <code>cuMemAllocManaged</code> pages, even when currently resident in VRAM, are always fair game for eviction, which adds migration round-trips during compute-heavy operations that touch the full working set.</p>
+<p>I also check <code>/proc/meminfo</code> on each allocation that crosses the threshold, to make sure host RAM can actually absorb the overflow. On systems with cgroup memory limits (Docker containers), I read the limit directly from <code>/sys/fs/cgroup/memory.max</code> since <code>/proc/meminfo</code> reflects host totals, not the container limit. A 2 GB safety margin guards against exhausting host RAM under pressure.</p>
+<hr>
+<h2 id="jax-and-the-bfc-allocator">JAX and the BFC Allocator</h2>
+<p>After PyTorch worked, I tried JAX. It failed with an XLA memory error during initialisation, before any user code ran. Understanding why requires looking at how the two frameworks actually talk to the CUDA allocator.</p>
+<p><a href="https://pytorch.org/docs/stable/notes/cuda.html#memory-management">PyTorch&rsquo;s caching allocator</a> calls <code>cudaMalloc</code> and <code>cudaFree</code> frequently, but caches freed blocks rather than immediately returning them to the driver. Each <code>torch.Tensor</code> allocation goes through the allocator, which either carves a block out of its cache or calls <code>cudaMalloc</code> if nothing fits. The key point: individual tensor allocations reach <code>cudaMalloc</code>, so my hook sees them. PyTorch also runs eagerly: Python code executes top to bottom, tensors are allocated and freed as the interpreter encounters them, and the live set at any moment is just what that point in the code has in scope.</p>
+<p>JAX&rsquo;s XLA backend works differently in both dimensions. At startup, XLA calls <code>cudaMalloc</code> once for a large slab (typically 90% of reported VRAM) and manages sub-allocations within that slab using a BFC (Best-Fit with Coalescing) algorithm. Individual array allocations never reach <code>cudaMalloc</code>. When XLA runs out of space in the slab, it reports OOM internally before ever calling <code>cudaMalloc</code> for more. My hook only sees the one initial slab allocation, which succeeds before VRAM is under any pressure. From cuda_swap&rsquo;s perspective the process made one allocation, it succeeded, and then JAX internally OOMs.</p>
+<p>The fix:</p>
+<div class="highlight"><pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-bash" data-lang="bash"><span style="display:flex;"><span><span style="color:#8be9fd;font-style:italic">XLA_PYTHON_CLIENT_ALLOCATOR</span><span style="color:#ff79c6">=</span>platform
+</span></span></code></pre></div><p>This tells XLA to bypass the BFC slab and call <code>cudaMalloc</code> per tensor. Every allocation now goes through the hook. The tradeoff is that the BFC allocator is more efficient for the common case (amortised allocation cost, better fragmentation handling), but platform mode is required for interception.</p>
+<p>Even with this flag, JAX uses more memory than PyTorch for equivalent operations. XLA traces and compiles the full computation graph before executing any of it. During compilation, XLA may keep multiple representations of intermediate values alive simultaneously. PyTorch&rsquo;s eager model doesn&rsquo;t have this: each operation executes immediately, and the only tensors alive are the ones Python currently holds references to.</p>
+<hr>
+<h2 id="the-training-case">The Training Case</h2>
+<p>Synthetic allocation tests (allocate N tensors, keep them alive, verify) are a clean way to confirm the basic mechanism works. Training has an additional pattern worth testing: the activation spike.</p>
+<p>During a forward pass, input activations at each layer are retained for the backward pass; gradient computation requires them. With large hidden dimensions, multiple activation tensors can be simultaneously alive at peak even if the model weights themselves fit in VRAM. The spike is temporary (activations are freed once backward completes), but its peak can significantly exceed the steady-state VRAM footprint.</p>
+<p>The test uses a <code>8192→8192→1</code> linear network with batch size tuned so that the three hidden-layer activations together exceed VRAM:</p>
+<pre tabindex="0"><code>model weights:            ~0.5 GB
+input tensor:             ~2 GB
+hidden layer 1 activations (kept for backward): ~2 GB
+hidden layer 2 activations (kept for backward): ~2 GB
+──────────────────────────────────────────────────────
+peak during forward/backward: ~6.5 GB  (on an 8 GB GPU)
+</code></pre><p>Without cuda_swap this OOMs on the first forward pass. With it, the overflow activations spill to host RAM and are faulted back in as backward proceeds. The cost is proportional to how much had to spill: each activation tensor that migrated has to be DMA&rsquo;d back during backward.</p>
+<hr>
+<h2 id="further-reading">Further Reading</h2>
+<ul>
+<li><a href="https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#unified-memory-programming">CUDA Unified Memory Programming Guide</a>: full spec for <code>cuMemAllocManaged</code>, <code>cuMemAdvise</code>, and the pre-Pascal vs Pascal migration model</li>
+<li><a href="https://pytorch.org/docs/stable/notes/cuda.html#memory-management">PyTorch CUDA Memory Management</a>: how the caching allocator works, when it calls <code>cudaMalloc</code>, and fragmentation behaviour</li>
+<li><a href="https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/common_runtime/bfc_allocator.h">BFC Allocator source (TensorFlow)</a>: the slab allocator XLA inherited; XLA originated as part of TensorFlow before being extracted into its own project</li>
+<li><a href="https://www.reddit.com/r/LocalLLaMA/comments/1di3kyn/long_shot_solution_combine_system_ram_with_vram/">r/LocalLLaMA thread on VRAM + RAM</a>: the discussion that pointed toward unified memory</li>
+</ul>
+
+  </div>
+</article>
+
+    </main>
+    <footer class="site-footer">
+  <span>© 2026 Ali Alshaarawy</span>
+  <div class="footer-links">
+    <a href="https://github.com/ali-alshaar7" target="_blank" rel="noopener">GitHub</a>
+    <a href="https://www.linkedin.com/in/ali-al-shaarawy-3620241b0/" target="_blank" rel="noopener">LinkedIn</a>
+  </div>
+</footer>
+
+  </div>
+  <script src="/js/stars.js"></script>
+</body>
+</html>
