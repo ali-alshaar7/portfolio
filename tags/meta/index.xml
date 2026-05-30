@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
+  <channel>
+    <title>Meta on Ali Alshaarawy</title>
+    <link>http://localhost:1313/portfolio/tags/meta/</link>
+    <description>Recent content in Meta on Ali Alshaarawy</description>
+    <generator>Hugo</generator>
+    <language>en-us</language>
+    <lastBuildDate>Mon, 25 May 2026 00:00:00 +0000</lastBuildDate>
+    <atom:link href="http://localhost:1313/portfolio/tags/meta/index.xml" rel="self" type="application/rss+xml" />
+    <item>
+      <title>Hello, World</title>
+      <link>http://localhost:1313/portfolio/posts/hello-world/</link>
+      <pubDate>Mon, 25 May 2026 00:00:00 +0000</pubDate>
+      <guid>http://localhost:1313/portfolio/posts/hello-world/</guid>
+      <description>First post. What this blog is and what I plan to write about.</description>
+    </item>
+  </channel>
+</rss>
